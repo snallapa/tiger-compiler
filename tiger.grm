@@ -1,0 +1,148 @@
+open Symbol
+
+fun combineDecs (decs) = (
+  case decs
+    of nil                    => nil
+     | Absyn.TypeDec(first) :: nil           => Absyn.TypeDec(first) :: nil
+     | Absyn.TypeDec(list1) :: Absyn.TypeDec(list2) :: nil => Absyn.TypeDec(list2 @ list1) :: nil
+     | Absyn.TypeDec(list1) :: Absyn.TypeDec(list2):: rest => combineDecs(Absyn.TypeDec(list2 @ list1) :: rest)
+     | Absyn.FunctionDec(first) :: nil           => Absyn.FunctionDec(first) :: nil
+     | Absyn.FunctionDec(list1) :: Absyn.FunctionDec(list2) :: nil => Absyn.FunctionDec(list2 @ list1) :: nil
+     | Absyn.FunctionDec(list1) :: Absyn.FunctionDec(list2):: rest => combineDecs(Absyn.FunctionDec(list2 @ list1) :: rest)
+     | first :: nil => first :: nil
+     | first :: rest => first :: combineDecs(rest)
+)
+
+%%
+%term
+    EOF
+  | ID of string
+  | INT of int | STRING of string
+  | COMMA | COLON | SEMICOLON | LPAREN | RPAREN | LBRACK | RBRACK
+  | LBRACE | RBRACE | DOT
+  | PLUS | MINUS | TIMES | DIVIDE | EQ | NEQ | LT | LE | GT | GE
+  | AND | OR | ASSIGN
+  | ARRAY | IF | THEN | ELSE | WHILE | FOR | TO | DO | LET | IN | END | OF
+  | BREAK | NIL
+  | FUNCTION | VAR | TYPE
+  | LOOP | UMINUS | ARRAYCREATE | DANGLINGELSE
+
+%nonterm
+    program of Absyn.exp
+  | dec of Absyn.dec
+  | decs of Absyn.dec list
+  | tydec of Absyn.dec
+  | vardec of Absyn.dec
+  | fundec of Absyn.dec
+  | ty of Absyn.ty
+  | tyfields of Absyn.field list
+  | nonempty_tyfields of Absyn.field list
+  | exp of Absyn.exp
+  | explist of (Absyn.exp * Absyn.pos) list
+  | lvalue of Absyn.var
+  | record of Absyn.exp
+  | recordinst of (symbol * Absyn.exp * pos) list
+  | exparglist of Absyn.exp list
+  | nonempty_exparglist of Absyn.exp list
+
+%pos int
+%start program
+%eop EOF
+%noshift EOF
+%pure
+
+%name Tiger
+
+%keyword WHILE FOR TO BREAK LET IN END FUNCTION VAR TYPE ARRAY IF THEN ELSE
+    DO OF NIL
+
+%prefer THEN ELSE LPAREN
+
+%nonassoc ID
+%nonassoc LBRACK
+%right LOOP ELSE ARRAYCREATE DANGLINGELSE
+%left ASSIGN
+%left OR
+%left AND
+%left EQ NEQ LE GE GT LT
+%left PLUS MINUS
+%left TIMES DIVIDE
+%left UMINUS
+
+%%
+
+program: exp (exp)
+
+exp: lvalue                                        (Absyn.VarExp(lvalue))
+   | lvalue ASSIGN exp                             (Absyn.AssignExp{var=lvalue, exp=exp, pos=ASSIGNleft})
+   | STRING                                        (Absyn.StringExp(STRING, STRINGleft))
+   | INT                                           (Absyn.IntExp(INT))
+   | LPAREN RPAREN                                 (Absyn.SeqExp(nil))
+   | LPAREN explist RPAREN                         (Absyn.SeqExp(rev explist))
+   | ID LPAREN exparglist RPAREN                   (Absyn.CallExp{func=Symbol.symbol(ID), args=exparglist, pos=IDleft})
+   | exp EQ exp                                    (Absyn.OpExp{left=exp1, oper=Absyn.EqOp, right=exp2, pos=EQleft})
+   | exp NEQ exp                                   (Absyn.OpExp{left=exp1, oper=Absyn.NeqOp, right=exp2, pos=NEQleft})
+   | exp LT exp                                    (Absyn.OpExp{left=exp1, oper=Absyn.LtOp, right=exp2, pos=LTleft})
+   | exp GT exp                                    (Absyn.OpExp{left=exp1, oper=Absyn.GtOp, right=exp2, pos=GTleft})
+   | exp LE exp                                    (Absyn.OpExp{left=exp1, oper=Absyn.LeOp, right=exp2, pos=LEleft})
+   | exp GE exp                                    (Absyn.OpExp{left=exp1, oper=Absyn.GeOp, right=exp2, pos=GEleft})
+   | exp AND exp                                   (Absyn.IfExp{test=exp1, then'=exp2, else'=SOME(Absyn.IntExp(0)), pos=ANDleft})
+   | exp OR exp                                    (Absyn.IfExp{test=exp1, then'=Absyn.IntExp(1), else'=SOME(exp2), pos=ORleft})
+   | exp PLUS exp                                  (Absyn.OpExp{left=exp1, oper=Absyn.PlusOp, right=exp2, pos=PLUSleft})
+   | exp MINUS exp                                 (Absyn.OpExp{left=exp1, oper=Absyn.MinusOp, right=exp2, pos=MINUSleft})
+   | exp TIMES exp                                 (Absyn.OpExp{left=exp1, oper=Absyn.TimesOp, right=exp2, pos=TIMESleft})
+   | exp DIVIDE exp                                (Absyn.OpExp{left=exp1, oper=Absyn.DivideOp, right=exp2, pos=DIVIDEleft})
+   | MINUS exp  %prec UMINUS                       (Absyn.OpExp{left=Absyn.IntExp(0), oper=Absyn.MinusOp, right=exp1, pos=MINUSleft})
+   | record                                        (record)
+   | ID LBRACK exp RBRACK OF exp %prec ARRAYCREATE (Absyn.ArrayExp{typ=Symbol.symbol(ID), size=exp1, init=exp2, pos=IDleft})
+   | IF exp THEN exp ELSE exp                      (Absyn.IfExp{test=exp1, then'=exp2, else'=SOME(exp3), pos=IFleft})
+   | IF exp THEN exp %prec DANGLINGELSE            (Absyn.IfExp{test=exp1, then'=exp2, else'=NONE, pos=IFleft})
+   | WHILE exp DO exp %prec LOOP                   (Absyn.WhileExp{test=exp1, body=exp2, pos=WHILEleft})
+   | FOR ID ASSIGN exp TO exp DO exp %prec LOOP    (Absyn.ForExp{var=Symbol.symbol(ID), escape=ref false, lo=exp1, hi=exp2, body=exp3, pos=FORleft})
+   | BREAK                                         (Absyn.BreakExp(BREAKleft))
+   | LET decs IN explist END                       (Absyn.LetExp{decs=(rev (combineDecs decs)), body=Absyn.SeqExp(rev explist), pos=LETleft})
+   | NIL                                           (Absyn.NilExp)
+
+decs:                 (nil)
+    | decs dec        (dec :: decs)
+
+dec: tydec             (tydec)
+   | vardec            (vardec)
+   | fundec            (fundec)
+
+tydec: TYPE ID EQ ty       (Absyn.TypeDec({name=Symbol.symbol(ID), ty=ty, pos=EQleft} :: nil))
+
+ty: ID                     (Absyn.NameTy(Symbol.symbol(ID), IDleft))
+  | LBRACE tyfields RBRACE (Absyn.RecordTy(tyfields))
+  | ARRAY OF ID            (Absyn.ArrayTy(Symbol.symbol(ID), IDleft))
+
+tyfields:                   (nil)
+        | nonempty_tyfields (rev nonempty_tyfields)
+
+nonempty_tyfields: ID COLON ID                ({name=Symbol.symbol(ID1), escape=ref false, typ=Symbol.symbol(ID2), pos=ID1left} :: nil)
+                 | nonempty_tyfields COMMA ID COLON ID ({name=Symbol.symbol(ID1), escape=ref false, typ=Symbol.symbol(ID2), pos=ID1left} :: nonempty_tyfields)
+
+vardec: VAR ID ASSIGN exp          (Absyn.VarDec{name=Symbol.symbol(ID), escape=ref false, typ=NONE, init=exp, pos=ASSIGNleft})
+      | VAR ID COLON ID ASSIGN exp (Absyn.VarDec{name=Symbol.symbol(ID1), escape=ref false, typ=SOME((Symbol.symbol(ID2), ID2left)), init=exp, pos=ASSIGNleft})
+
+fundec: FUNCTION ID LPAREN tyfields RPAREN EQ exp          (Absyn.FunctionDec({name=Symbol.symbol(ID), params=tyfields, result=NONE, body=exp, pos=EQleft} :: nil))
+      | FUNCTION ID LPAREN tyfields RPAREN COLON ID EQ exp (Absyn.FunctionDec({name=Symbol.symbol(ID1), params=tyfields, result=SOME(Symbol.symbol(ID2), ID2left), body=exp, pos=EQleft} :: nil))
+
+record: ID LBRACE recordinst RBRACE (Absyn.RecordExp({typ=Symbol.symbol(ID), fields=recordinst, pos=IDleft}))
+
+recordinst: ID EQ exp                  ((Symbol.symbol(ID), exp, IDleft) :: nil)
+          | ID EQ exp COMMA recordinst ((Symbol.symbol(ID), exp, IDleft) :: recordinst)
+
+explist: exp                   ((exp, expleft) :: nil)
+       | explist SEMICOLON exp ((exp, expleft) :: explist)
+
+exparglist:                     (nil)
+          | nonempty_exparglist (rev nonempty_exparglist)
+
+nonempty_exparglist: exp                               (exp :: nil)
+                   | nonempty_exparglist COMMA exp     (exp :: nonempty_exparglist)
+
+lvalue: ID                        (Absyn.SimpleVar(Symbol.symbol(ID), IDleft))
+      | ID LBRACK exp RBRACK      (Absyn.SubscriptVar(Absyn.SimpleVar(Symbol.symbol(ID), IDleft), exp, LBRACKright))
+      | lvalue DOT ID             (Absyn.FieldVar(lvalue, Symbol.symbol(ID), IDleft))
+      | lvalue LBRACK exp RBRACK  (Absyn.SubscriptVar(lvalue, exp, LBRACKright))
